@@ -1,0 +1,94 @@
+#!/bin/bash
+
+OUTPUT_DIR="/home/matheus/testes/MRI-1hour-1s"
+while true
+do
+PID=$1
+if [ -z "$PID" ]; then
+    echo Usage: $0 PID
+    exit 1
+fi
+
+PROCESS_STAT=($(sed -E 's/\([^)]+\)/X/' "/proc/$PID/stat"))
+PROCESS_UTIME=${PROCESS_STAT[13]}
+PROCESS_STIME=${PROCESS_STAT[14]}
+PROCESS_THREADS=${PROCESS_STAT[20]}
+PROCESS_STARTTIME=${PROCESS_STAT[21]}
+PROCESS_VSIZE=${PROCESS_STAT[23]}
+SYSTEM_UPTIME_SEC=$(tr . ' ' </proc/uptime | awk '{print $1}')
+
+CLK_TCK=$(getconf CLK_TCK)
+
+let PROCESS_UTIME_SEC="$PROCESS_UTIME / $CLK_TCK"
+let PROCESS_STIME_SEC="$PROCESS_STIME / $CLK_TCK"
+let PROCESS_STARTTIME_SEC="$PROCESS_STARTTIME / $CLK_TCK"
+
+let PROCESS_ELAPSED_SEC="$SYSTEM_UPTIME_SEC - $PROCESS_STARTTIME_SEC"
+let PROCESS_USAGE_SEC="$PROCESS_UTIME_SEC + $PROCESS_STIME_SEC"
+let PROCESS_USAGE="$PROCESS_USAGE_SEC * 100 / $PROCESS_ELAPSED_SEC"
+
+# Calculate used and total memory using pmap
+MEMORY_USAGE_KB=$(sudo pmap $PID | tail -n 1 | awk '/[0-9]K/{print $2}' | sed 's/K//')
+TOTAL_MEMORY_KB=$(grep 'MemTotal' /proc/meminfo | awk '{print $2}')
+
+# Calculate memory usage percentage
+MEMORY_USAGE_PERCENT=$(echo "scale=4; ($MEMORY_USAGE_KB / $TOTAL_MEMORY_KB) * 100" | bc)
+
+# Calculate RSS in KB from /proc/[PID]/statm
+RSS_PAGES=$(awk '{print $2}' "/proc/$PID/statm")
+RSS_KB=$((RSS_PAGES * $(getconf PAGESIZE) / 1024))
+
+# Calculate RSS usage percentage
+RSS_USAGE_PERCENT=$(echo "scale=4; ($RSS_KB / $TOTAL_MEMORY_KB) * 100" | bc)
+
+
+# Calculate the equivalent of %CPU from /proc/stat
+    TOTAL_CPU_TIME=($(grep '^cpu ' /proc/stat))
+    TOTAL_CPU_USER=${TOTAL_CPU_TIME[1]}
+    TOTAL_CPU_NICE=${TOTAL_CPU_TIME[2]}
+    TOTAL_CPU_SYSTEM=${TOTAL_CPU_TIME[3]}
+    TOTAL_CPU_IDLE=${TOTAL_CPU_TIME[4]}
+    
+    TOTAL_CPU_USED=$((TOTAL_CPU_USER + TOTAL_CPU_NICE + TOTAL_CPU_SYSTEM))
+    TOTAL_CPU_USAGE=$(echo "scale=2; ($TOTAL_CPU_USED / ($TOTAL_CPU_USED + $TOTAL_CPU_IDLE)) * 100" | bc)
+    
+    
+    
+    # Get performance counter stats using perf and store them in variables
+    PERF_STATS=$(sudo perf stat -p $PID sleep 1 2>&1)
+    CYCLES=$(echo "$PERF_STATS" | grep "cycles" | awk '{gsub(/,/, ".", $1); print $1; exit}')
+    INSTRUCTIONS=$(echo "$PERF_STATS" | grep "instructions" | awk '{gsub(/,/, ".", $1); print $1; exit}')
+    BRANCHES=$(echo "$PERF_STATS" | grep "branches" | awk '{gsub(/,/, ".", $1); print $1; exit}')
+    BRANCH_MISSES=$(echo "$PERF_STATS" | grep "branch-misses" | awk '{gsub(/,/, ".", $1); print $1; exit}')
+    TASK_CLOCK=$(echo "$PERF_STATS" | grep "task-clock" | awk '{gsub(/,/, ".", $1); print $1; exit}')
+    CONTEXT_SWITCHES=$(echo "$PERF_STATS" | grep "context-switches" | awk '{gsub(/,/, ".", $1); print $1; exit}')
+    CPU_MIGRATIONS=$(echo "$PERF_STATS" | grep "cpu-migrations" | awk '{gsub(/,/, ".", $1); print $1; exit}')
+    PAGE_FAULTS=$(echo "$PERF_STATS" | grep "page-faults" | awk '{gsub(/,/, ".", $1); print $1; exit}')
+    TIME_ELAPSED=$(echo "$PERF_STATS" | grep "seconds time elapsed" | awk '{gsub(/,/, ".", $1); print $1; exit}')
+
+echo The PID $PID has spent ${PROCESS_UTIME_SEC}s in user mode, ${PROCESS_STIME_SEC}s in kernel mode. Total CPU usage is ${PROCESS_USAGE_SEC}s
+echo The process has been running for ${PROCESS_ELAPSED_SEC}s. So, the process has used ${PROCESS_USAGE}% of CPU
+echo The process virtual memory size is ${PROCESS_VSIZE} bytes and it has ${PROCESS_THREADS} threads
+echo Memory usage is ${MEMORY_USAGE_PERCENT}% of total available memory.
+echo RSS Resident Set Size is approximately ${RSS_KB} KB.
+echo RSS Usage is ${RSS_USAGE_PERCENT}% of total available memory.
+echo Equivalent %CPU is approximately ${TOTAL_CPU_USAGE}%.
+echo "Performance Counter Stats:"
+echo "$PERF_STATS"
+
+    # Create or append to a CSV file named after the PID
+    CSV_FILE="$OUTPUT_DIR/$PID.csv"
+
+    # Check if the CSV file exists; if not, create a header row
+    if [ ! -f "$CSV_FILE" ]; then
+        echo "Time Elapsed (s),Cycles,Instructions,Branches,Branch Misses,Task Clock (msec),Context Switches,CPU Migrations,Page Faults,Total CPU Usage (%), RSS (KB), RSS (%), Virtual Memory Size, Total Memory Usage (%)" > "$CSV_FILE"
+    fi
+
+    # Append the data to the CSV file
+    echo "$TIME_ELAPSED,$CYCLES,$INSTRUCTIONS,$BRANCHES,$BRANCH_MISSES,$TASK_CLOCK,$CONTEXT_SWITCHES,$CPU_MIGRATIONS,$PAGE_FAULTS,$TOTAL_CPU_USAGE, $RSS_KB, $RSS_USAGE_PERCENT, $PROCESS_VSIZE, $MEMORY_USAGE_PERCENT" >> "$CSV_FILE"
+    
+    chmod 777 "$CSV_FILE"
+
+    echo "Data saved to $CSV_FILE"
+
+done
