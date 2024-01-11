@@ -1,8 +1,5 @@
 # FEVER Architecture Tutorial
 
-If you are reading this while not attending a live P4 tutorial class,
-see [below](#older-tutorials) for links to information about recently
-given live classes.
 
 
 ## Introduction
